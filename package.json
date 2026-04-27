@@ -1,0 +1,12 @@
+{
+  "name": "lbs-course-design",
+  "version": "1.0.0",
+  "description": "模拟夺标游戏位置服务 API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
