@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 import json
+import math
+import random
 import threading
 import time
 
@@ -77,6 +81,94 @@ def get_json(path, expect_status=None):
     return response.status_code, data
 
 
+def random_point_far_from_target(tx: float, ty: float) -> tuple[float, float]:
+    """在终点外随机生成起点（极坐标）。"""
+    angle = random.random() * 2 * math.pi
+    dist = random.uniform(12.0, 22.0)
+    return tx + dist * math.cos(angle), ty + dist * math.sin(angle)
+
+
+def random_step_toward(
+    x: float, y: float, tx: float, ty: float
+) -> tuple[float, float]:
+    """
+    沿「当前点 -> 终点」方向走随机步长，并加垂直方向的随机扰动，
+    模拟朝目标前进但带噪声的轨迹。
+    """
+    dx, dy = tx - x, ty - y
+    dist = math.hypot(dx, dy)
+    if dist < 1e-9:
+        return x + random.uniform(-0.2, 0.2), y + random.uniform(-0.2, 0.2)
+
+    step = random.uniform(0.9, 2.8)
+    step = min(step, dist * random.uniform(0.35, 0.95))
+
+    nx = x + (dx / dist) * step
+    ny = y + (dy / dist) * step
+
+    px, py = -dy / dist, dx / dist
+    noise = random.uniform(-1.0, 1.0)
+    nx += px * noise
+    ny += py * noise
+    return nx, ny
+
+
+def advance_position(
+    positions: dict, team_id: str, member_id: str, tx: float, ty: float
+) -> tuple[float, float]:
+    key = (team_id, member_id)
+    if key not in positions:
+        positions[key] = random_point_far_from_target(tx, ty)
+    cur_x, cur_y = positions[key]
+    nxt_x, nxt_y = random_step_toward(cur_x, cur_y, tx, ty)
+    positions[key] = (nxt_x, nxt_y)
+    return nxt_x, nxt_y
+
+
+def post_report_at(
+    competition_id: str, team_id: str, member_id: str, x: float, y: float
+):
+    payload = {
+        "competitionId": competition_id,
+        "teamId": team_id,
+        "memberId": member_id,
+        "x": x,
+        "y": y,
+    }
+    return post_json("/reports", payload)
+
+
+def march_member_until_arrives(
+    competition_id: str,
+    team_id: str,
+    member_id: str,
+    tx: float,
+    ty: float,
+    positions: dict,
+    max_steps: int = 50,
+    pause_sec: float = 0.35,
+):
+    """
+    多次随机朝终点迈步并上报，直到该成员本次首次进入终点圈（memberArrivedNow）
+    或竞赛已结束。
+    """
+    for i in range(max_steps):
+        x, y = advance_position(positions, team_id, member_id, tx, ty)
+        _, result = post_report_at(competition_id, team_id, member_id, x, y)
+        print(
+            f"[朝目标随机迈步 {i + 1}] {team_id}/{member_id} "
+            f"-> ({x:.3f}, {y:.3f}) | 响应: {result.get('message', result)}"
+        )
+        time.sleep(pause_sec)
+        if result.get("status") == "已结束":
+            return result
+        if result.get("memberArrivedNow"):
+            return result
+    raise AssertionError(
+        f"{team_id}/{member_id} 在 {max_steps} 步内仍未进入终点圈，请调大步长或上限"
+    )
+
+
 def main():
     with notifications_lock:
         notifications.clear()
@@ -87,6 +179,10 @@ def main():
     )
     assert status_create == 201
     competition_id = comp["competitionId"]
+    target = comp["target"]
+    tx, ty = float(target["x"]), float(target["y"])
+
+    positions: dict[tuple[str, str], tuple[float, float]] = {}
 
     # 2) 创建团队
     post_json(f"/competitions/{competition_id}/teams", {"teamId": "Alpha"}, 201)
@@ -113,54 +209,25 @@ def main():
 
     time.sleep(1)
 
-    reports = [
-        {"competitionId": competition_id, "teamId": "Bravo", "memberId": "N1", "x": 2, "y": 3},
-        {
-            "competitionId": competition_id,
-            "teamId": "Alpha",
-            "memberId": "M1",
-            "x": 10.4,
-            "y": 10.2,
-        },
-        {
-            "competitionId": competition_id,
-            "teamId": "Alpha",
-            "memberId": "M2",
-            "x": 9.2,
-            "y": 10.6,
-        },
-        {
-            "competitionId": competition_id,
-            "teamId": "Alpha",
-            "memberId": "M3",
-            "x": 10.1,
-            "y": 9.3,
-        },
-        {
-            "competitionId": competition_id,
-            "teamId": "Bravo",
-            "memberId": "N1",
-            "x": 10.0,
-            "y": 10.0,
-        },
-    ]
+    # 5) Bravo 先随便朝终点走一步（多半仍在圈外），再 Alpha 三人轮流各走到「进圈」
+    bx, by = advance_position(positions, "Bravo", "N1", tx, ty)
+    _, bravo_first = post_report_at(competition_id, "Bravo", "N1", bx, by)
+    print(f"[先手 Bravo] N1 -> ({bx:.3f}, {by:.3f}) | {bravo_first}")
+    time.sleep(0.35)
 
-    for payload in reports:
-        _, result = post_json("/reports", payload)
-        print(f"[上报结果] {payload['teamId']}/{payload['memberId']} -> {result}")
-        time.sleep(0.35)
+    for mid in ("M1", "M2", "M3"):
+        march_member_until_arrives(
+            competition_id, "Alpha", mid, tx, ty, positions, max_steps=50, pause_sec=0.35
+        )
 
-    # 5) 竞赛结束后：再上报应返回结束信息（即使团队/成员仍可识别）
-    status_done, body_done = post_json(
-        "/reports",
-        {
-            "competitionId": competition_id,
-            "teamId": "Bravo",
-            "memberId": "N2",
-            "x": 10,
-            "y": 10,
-        },
-    )
+    # 竞赛应已由 Alpha 夺标结束；Bravo 再报一次仅验证「已结束」响应
+    bx2, by2 = advance_position(positions, "Bravo", "N1", tx, ty)
+    _, bravo_after = post_report_at(competition_id, "Bravo", "N1", bx2, by2)
+    print(f"[结束后 Bravo] N1 -> ({bx2:.3f}, {by2:.3f}) | {bravo_after}")
+
+    # 6) 竞赛结束后：再上报应返回结束信息（即使团队/成员仍可识别）
+    nx, ny = advance_position(positions, "Bravo", "N2", tx, ty)
+    status_done, body_done = post_report_at(competition_id, "Bravo", "N2", nx, ny)
     assert status_done == 200
     assert body_done.get("winnerTeamId") == "Alpha"
     assert body_done.get("status") == "已结束"
