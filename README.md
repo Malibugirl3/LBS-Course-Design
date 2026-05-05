@@ -3,6 +3,9 @@
 ## 1. 项目说明
 本项目实现一个“模拟夺标游戏位置服务”API，并提供 Python 客户端用于接口测试。
 
+**详细设计说明**：见仓库根目录 [`DESIGN.md`](./DESIGN.md)。  
+**简明使用说明（运行与打包）**：见 [`USAGE.md`](./USAGE.md)。
+
 技术选型：
 - 服务端：Node.js + Express
 - 数据存储：内存存储
@@ -38,13 +41,14 @@
 ## 4. API 设计
 ### 4.1 新建竞赛
 - 方法：`POST /competitions`
-- 请求体：
+- 请求体（`x`/`y` 或 `endX`/`endY`，二选一写法均可）：
 ```json
 {
   "x": 10,
   "y": 10
 }
 ```
+或 `{ "endX": 10, "endY": 10 }`。
 
 ### 4.2 创建团队
 - 方法：`POST /competitions/:competitionId/teams`

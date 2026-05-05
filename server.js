@@ -53,11 +53,13 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/competitions', (req, res) => {
-  const x = toNumber(req.body.x);
-  const y = toNumber(req.body.y);
+  const x = toNumber(req.body.x ?? req.body.endX);
+  const y = toNumber(req.body.y ?? req.body.endY);
 
   if (x === null || y === null) {
-    return res.status(400).json({ error: '终点坐标 x、y 必须提供且为数值' });
+    return res.status(400).json({
+      error: '终点坐标必须提供且为数值，可使用 x、y 或 endX、endY'
+    });
   }
 
   const competitionId = `COMP_${competitionSeq++}`;
@@ -115,11 +117,20 @@ app.post('/competitions/:competitionId/teams', (req, res) => {
 
 app.post('/reports', (req, res) => {
   const competitionId = req.body.competitionId ?? req.body.compId;
-  const { teamId, memberId } = req.body;
+  const teamIdRaw = req.body.teamId;
+  const memberIdRaw = req.body.memberId;
+  const teamId = typeof teamIdRaw === 'string' ? teamIdRaw.trim() : '';
+  const memberId = typeof memberIdRaw === 'string' ? memberIdRaw.trim() : '';
   const x = toNumber(req.body.x);
   const y = toNumber(req.body.y);
 
-  if (!competitionId || !teamId || !memberId || x === null || y === null) {
+  if (
+    !competitionId
+    || !teamId
+    || !memberId
+    || x === null
+    || y === null
+  ) {
     return res.status(400).json({
       error: '提交数据缺失，必须包含 competitionId、teamId、memberId、x、y'
     });
@@ -130,13 +141,13 @@ app.post('/reports', (req, res) => {
     return;
   }
 
+  if (competition.finished) {
+    return res.json(buildFinishedPayload(competition));
+  }
+
   const team = competition.teams.get(teamId);
   if (!team) {
     return res.status(404).json({ error: '团队不存在' });
-  }
-
-  if (competition.finished) {
-    return res.json(buildFinishedPayload(competition));
   }
 
   const reportTime = new Date().toISOString();
@@ -179,7 +190,7 @@ app.post('/reports', (req, res) => {
       winnerTeamId: teamId,
       finishedAt: reportTime,
       reportTime,
-      memberArrived: true,
+      memberArrived: distance < ARRIVAL_DISTANCE,
       memberArrivedNow,
       teamArrivedCount: team.arrivedMembers.size
     });
